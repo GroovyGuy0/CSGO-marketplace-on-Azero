@@ -1,0 +1,117 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+use ink_lang::contract;
+use ink_prelude::string::String;
+
+#[contract]
+pub mod skin_marketplace {
+    use ink_storage::{
+        collections::HashMap as StorageHashMap,
+        traits::{PackedLayout, SpreadLayout},
+    };
+
+    #[derive(Debug, PartialEq, Eq, scale::Encode, scale::Decode, SpreadLayout, PackedLayout)]
+    pub struct Skin {
+        owner: AccountId,
+        name: String,
+        price: Balance,
+        is_for_sale: bool,
+    }
+
+    #[ink(storage)]
+    pub struct SkinMarketplace {
+        skins: StorageHashMap<SkinId, Skin>,
+        skin_to_owner: StorageHashMap<SkinId, AccountId>,
+        owner_skin_count: StorageHashMap<AccountId, u32>,
+    }
+
+    #[ink(event)]
+    pub struct SkinAdded {
+        #[ink(topic)]
+        skin_id: SkinId,
+        name: String,
+        price: Balance,
+    }
+
+    #[ink(event)]
+    pub struct SkinSold {
+        #[ink(topic)]
+        skin_id: SkinId,
+        buyer: AccountId,
+        price: Balance,
+    }
+
+    impl SkinMarketplace {
+        #[ink(constructor)]
+        pub fn new() -> Self {
+            Self {
+                skins: StorageHashMap::new(),
+                skin_to_owner: StorageHashMap::new(),
+                owner_skin_count: StorageHashMap::new(),
+            }
+        }
+
+        #[ink(message)]
+        pub fn add_skin(&mut self, name: String, price: Balance) -> SkinId {
+            let caller = self.env().caller();
+            assert!(price > 0, "Price must be greater than zero");
+
+            let skin_id = self.skins.len() as SkinId;
+            let skin = Skin {
+                owner: caller,
+                name,
+                price,
+                is_for_sale: true,
+            };
+            self.skins.insert(skin_id, skin.clone());
+            self.skin_to_owner.insert(skin_id, caller);
+            *self.owner_skin_count.entry(caller).or_insert(0) += 1;
+
+            self.env().emit_event(SkinAdded {
+                skin_id,
+                name: skin.name.clone(),
+                price: skin.price,
+            });
+
+            skin_id
+        }
+
+        #[ink(message)]
+        pub fn buy_skin(&mut self, skin_id: SkinId) -> bool {
+            let caller = self.env().caller();
+            let mut skin = self.skins.get(&skin_id).unwrap().clone();
+            assert!(
+                skin.is_for_sale,
+                "Skin is not for sale"
+            );
+            let price = skin.price;
+            let seller = skin.owner;
+            assert!(
+                self.env().balance() >= price,
+                "Insufficient balance to buy skin"
+            );
+
+            skin.is_for_sale = false;
+            skin.owner = caller;
+            self.skins.insert(skin_id, skin.clone());
+            self.skin_to_owner.insert(skin_id, caller);
+            *self.owner_skin_count.entry(caller).or_insert(0) += 1;
+            *self.owner_skin_count.get_mut(&seller).unwrap() -= 1;
+
+            self.env().transfer(seller, price).unwrap();
+
+            self.env().emit_event(SkinSold {
+                skin_id,
+                buyer: caller,
+                price,
+            });
+
+            true
+        }
+
+        #[ink(message)]
+        pub fn get_skin(&self, skin_id: SkinId) -> Option<&Skin> {
+            self.skins.get(&skin_id)
+        }
+
+        #[ink(message)]
+        pub fn get_skin_owner(&self, skin_id
